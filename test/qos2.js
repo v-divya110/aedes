@@ -128,13 +128,13 @@ test('client.publish with clean=true subscribption QoS 2', function (t) {
 
   broker.on('client', function (client) {
     brokerClient = client
+
+    brokerClient.on('error', function (err) {
+      t.error(err)
+    })
   })
 
   var subscriber = connect(setup(broker), { clean: true })
-
-  brokerClient.on('error', function (err) {
-    t.error(err)
-  })
 
   subscribe(t, subscriber, 'hello', 2, function () {
     t.pass('subscribed')
@@ -193,6 +193,39 @@ test('subscribe QoS 0, but publish QoS 2', function (t) {
 
   subscribe(t, subscriber, 'hello', 0, function () {
     subscriber.outStream.once('data', function (packet) {
+      t.deepEqual(packet, expected, 'packet must match')
+      t.end()
+    })
+
+    publish(t, publisher, {
+      cmd: 'publish',
+      topic: 'hello',
+      payload: Buffer.from('world'),
+      qos: 2,
+      retain: false,
+      messageId: 42,
+      dup: false
+    })
+  })
+})
+
+test('subscribe QoS 1, but publish QoS 2', function (t) {
+  var broker = aedes()
+  var publisher = connect(setup(broker))
+  var subscriber = connect(setup(broker))
+  var expected = {
+    cmd: 'publish',
+    topic: 'hello',
+    payload: Buffer.from('world'),
+    qos: 1,
+    dup: false,
+    length: 14,
+    retain: false
+  }
+
+  subscribe(t, subscriber, 'hello', 1, function () {
+    subscriber.outStream.once('data', function (packet) {
+      delete packet.messageId
       t.deepEqual(packet, expected, 'packet must match')
       t.end()
     })

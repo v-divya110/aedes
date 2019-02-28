@@ -34,7 +34,9 @@ test('delivers a will', function (t) {
     t.end()
   })
 
-  s.conn.destroy()
+  process.nextTick(() => {
+    s.conn.destroy()
+  })
 })
 
 test('calling close two times should not deliver two wills', function (t) {
@@ -117,15 +119,18 @@ test('store the will in the persistence', function (t) {
   // willConnect populates opts with a will
   var s = willConnect(setup(), opts)
 
-  s.broker.persistence.getWill({
-    id: opts.clientId
-  }, function (err, packet) {
-    t.error(err, 'no error')
-    t.deepEqual(packet.topic, opts.will.topic, 'will topic matches')
-    t.deepEqual(packet.payload, opts.will.payload, 'will payload matches')
-    t.deepEqual(packet.qos, opts.will.qos, 'will qos matches')
-    t.deepEqual(packet.retain, opts.will.retain, 'will retain matches')
-    t.end()
+  s.broker.on('client', function () {
+    // this is connack
+    s.broker.persistence.getWill({
+      id: opts.clientId
+    }, function (err, packet) {
+      t.error(err, 'no error')
+      t.deepEqual(packet.topic, opts.will.topic, 'will topic matches')
+      t.deepEqual(packet.payload, opts.will.payload, 'will payload matches')
+      t.deepEqual(packet.qos, opts.will.qos, 'will qos matches')
+      t.deepEqual(packet.retain, opts.will.retain, 'will retain matches')
+      t.end()
+    })
   })
 })
 
@@ -160,4 +165,113 @@ test('delete the will in the persistence after publish', function (t) {
     })
     cb()
   }
+})
+
+test('delivers a will with authorization', function (t) {
+  let authorized = false
+  var opts = {}
+  // willConnect populates opts with a will
+  var s = willConnect(setup(aedes({ authorizePublish: (_1, _2, callback) => { authorized = true; callback(null) } })), opts)
+
+  s.broker.on('clientDisconnect', function () {
+    t.end()
+  })
+
+  s.broker.mq.on('mywill', function (packet, cb) {
+    t.equal(packet.topic, opts.will.topic, 'topic matches')
+    t.deepEqual(packet.payload, opts.will.payload, 'payload matches')
+    t.equal(packet.qos, opts.will.qos, 'qos matches')
+    t.equal(packet.retain, opts.will.retain, 'retain matches')
+    t.equal(authorized, true, 'authorization called')
+    cb()
+  })
+
+  process.nextTick(function () {
+    s.conn.destroy()
+  })
+})
+
+test('delivers a will waits for authorization', function (t) {
+  let authorized = false
+  var opts = {}
+  // willConnect populates opts with a will
+  var s = willConnect(setup(aedes({ authorizePublish: (_1, _2, callback) => { authorized = true; setImmediate(() => { callback(null) }) } })), opts)
+
+  s.broker.on('clientDisconnect', function () {
+    t.end()
+  })
+
+  s.broker.mq.on('mywill', function (packet, cb) {
+    t.equal(packet.topic, opts.will.topic, 'topic matches')
+    t.deepEqual(packet.payload, opts.will.payload, 'payload matches')
+    t.equal(packet.qos, opts.will.qos, 'qos matches')
+    t.equal(packet.retain, opts.will.retain, 'retain matches')
+    t.equal(authorized, true, 'authorization called')
+    cb()
+  })
+
+  process.nextTick(function () {
+    s.conn.destroy()
+  })
+})
+
+test('does not deliver a will without authorization', function (t) {
+  let authorized = false
+  var opts = {}
+  // willConnect populates opts with a will
+  var s = willConnect(setup(aedes({ authorizePublish: (_1, _2, callback) => { authorized = true; callback(new Error()) } })), opts)
+
+  s.broker.on('clientDisconnect', function () {
+    t.equal(authorized, true, 'authorization called')
+    t.end()
+  })
+
+  s.broker.mq.on('mywill', function (packet, cb) {
+    t.fail('received will without authorization')
+    cb()
+  })
+
+  process.nextTick(function () {
+    s.conn.destroy()
+  })
+})
+
+test('does not deliver a will without authentication', function (t) {
+  let authenticated = false
+  var opts = {}
+  // willConnect populates opts with a will
+  var s = willConnect(setup(aedes({ authenticate: (_1, _2, _3, callback) => { authenticated = true; callback(new Error(), false) } })), opts)
+
+  s.broker.once('clientError', function () {
+    t.equal(authenticated, true, 'authentication called')
+    t.end()
+  })
+
+  s.broker.mq.on('mywill', function (packet, cb) {
+    t.fail('received will without authentication')
+    cb()
+  })
+})
+
+test('does not deliver will if keepalive is triggered during authentication', function (t) {
+  var opts = {}
+  opts.keepalive = 1
+  var broker = aedes({
+    authenticate: function (c, u, p, cb) {
+      setTimeout(function () {
+        cb(null, true)
+      }, 3000)
+    }
+  })
+
+  broker.on('keepaliveTimeout', function () {
+    t.end()
+  })
+
+  broker.mq.on('mywill', function (packet, cb) {
+    cb()
+    t.fail('Received will when it was not expected')
+  })
+
+  willConnect(setup(broker), opts)
 })
